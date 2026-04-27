@@ -1,12 +1,7 @@
 const express = require('express');
-const fs = require('fs');
-if (!fs.existsSync('uploads')) {
-    fs.mkdirSync('uploads');
-}
 const cors = require('cors');
 const { Pool } = require('pg');
 const multer = require('multer');
-const path = require('path');
 const sharp = require('sharp');
 require('dotenv').config();
 
@@ -14,10 +9,9 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
-app.get('/uploads', (req, res) => res.send('Папка для картинок работает'));
+app.get('/', (req, res) => res.send('Сервер Mangal House работает, картинки летят в облако!'));
 
 const pool = new Pool({
     user: process.env.DB_USER,
@@ -30,30 +24,45 @@ const pool = new Pool({
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// --- ОБНОВЛЕННАЯ ЗАГРУЗКА КАРТИНОК (С УМНЫМ ОПРЕДЕЛЕНИЕМ АДРЕСА) ---
+// --- ОБНОВЛЕННАЯ ЗАГРУЗКА КАРТИНОК (ПРЯМО В ВЕЧНЫЙ SUPABASE) ---
 app.post('/api/upload', upload.single('image'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
 
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     const filename = uniqueSuffix + '.webp';
-    const filepath = path.join(__dirname, 'uploads', filename);
 
     try {
-        await sharp(req.file.buffer)
+        // 1. Сжимаем картинку прямо в оперативной памяти
+        const webpBuffer = await sharp(req.file.buffer)
             .resize(800, null, { withoutEnlargement: true })
             .webp({ quality: 80 })
-            .toFile(filepath);
+            .toBuffer();
 
-        // Умное определение ссылки: если запрос пришел через Cloudflare,
-        // сервер подставит ссылку Cloudflare. Если с компа - подставит localhost.
-        const host = req.headers['x-forwarded-host'] || req.get('host');
-        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-        const imageUrl = `${protocol}://${host}/uploads/${filename}`;
+        // 2. Отправляем напрямую в Supabase Storage
+        const uploadUrl = `${process.env.SUPABASE_URL}/storage/v1/object/menu-images/${filename}`;
+        const uploadResponse = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                'apikey': process.env.SUPABASE_ANON_KEY,
+                'Content-Type': 'image/webp'
+            },
+            body: webpBuffer
+        });
+
+        if (!uploadResponse.ok) {
+            const errText = await uploadResponse.text();
+            console.error('Ошибка Supabase:', errText);
+            return res.status(500).json({ error: 'Ошибка сохранения в облаке' });
+        }
+
+        // 3. Формируем публичную ссылку на картинку
+        const imageUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/menu-images/${filename}`;
 
         res.json({ imageUrl });
     } catch (error) {
-        console.error('Ошибка сжатия картинки:', error);
-        res.status(500).json({ error: 'Ошибка обработки изображения' });
+        console.error('Ошибка обработки картинки:', error);
+        res.status(500).json({ error: 'Ошибка сервера при загрузке' });
     }
 });
 
