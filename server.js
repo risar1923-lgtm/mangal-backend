@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const multer = require('multer');
-const sharp = require('sharp');
 require('dotenv').config();
 
 const app = express();
@@ -12,7 +11,7 @@ app.use(express.json());
 
 // Проверочные роуты
 app.get('/favicon.ico', (req, res) => res.status(204).end());
-app.get('/', (req, res) => res.send('✅ СЕРВЕР ОБНОВЛЕН ДО ВЕРСИИ SUPABASE'));
+app.get('/', (req, res) => res.send('✅ СЕРВЕР ОБНОВЛЕН: РЕЖИМ ПРЯМЫХ ССЫЛОК GITHUB'));
 
 const pool = new Pool({
     user: process.env.DB_USER,
@@ -20,49 +19,35 @@ const pool = new Pool({
     database: process.env.DB_NAME,
     password: process.env.DB_PASSWORD,
     port: process.env.DB_PORT,
+    ssl: { rejectUnauthorized: false } // Нужно для подключения к Supabase DB
 });
 
+// Настройка multer (нам теперь не нужен Sharp, так как ты сам готовишь фото)
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// ЗАГРУЗКА В SUPABASE STORAGE
+/**
+ * ЗАМЕНА ЗАГРУЗКИ В ОБЛАКО
+ * Теперь этот роут просто подтверждает получение имени файла.
+ * Ты вручную загружаешь фото в public/images/ на GitHub.
+ */
 app.post('/api/upload', upload.single('image'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
-
-    console.log('🚀 Начинаю загрузку в Supabase...');
-    const filename = `${Date.now()}-${Math.round(Math.random() * 1E9)}.webp`;
-
     try {
-        const webpBuffer = await sharp(req.file.buffer)
-            .resize(800, null, { withoutEnlargement: true })
-            .webp({ quality: 80 })
-            .toBuffer();
-
-        const uploadUrl = `${process.env.SUPABASE_URL}/storage/v1/object/menu-images/${filename}`;
+        // Если ты просто вставил имя файла в админке, берем его
+        const fileName = req.body.fileName || (req.file ? req.file.originalname : null);
         
-        const uploadResponse = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
-                'apikey': process.env.SUPABASE_ANON_KEY,
-                'Content-Type': 'image/webp'
-            },
-            body: webpBuffer
-        });
-
-        if (!uploadResponse.ok) {
-            const errText = await uploadResponse.text();
-            console.error('❌ Ошибка Supabase Storage:', errText);
-            return res.status(500).json({ error: 'Ошибка сохранения в облаке' });
+        if (!fileName) {
+            return res.status(400).json({ error: 'Имя файла не указано' });
         }
 
-        const imageUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/menu-images/${filename}`;
-        console.log('✅ Файл успешно загружен. Ссылка:', imageUrl);
+        // Формируем путь, который будет указывать на папку внутри твоего сайта
+        const imageUrl = `/images/${fileName}`;
+        
+        console.log('✅ Использование локального изображения:', imageUrl);
         res.json({ imageUrl });
-
     } catch (error) {
-        console.error('❌ Критическая ошибка сервера:', error);
-        res.status(500).json({ error: 'Ошибка сервера при загрузке' });
+        console.error('❌ Ошибка при обработке пути:', error);
+        res.status(500).json({ error: 'Ошибка сервера' });
     }
 });
 
@@ -166,6 +151,7 @@ app.post('/api/menu', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         await client.query('ROLLBACK');
+        console.error('Ошибка сохранения меню:', err);
         res.status(500).json({ error: 'Ошибка сохранения' });
     } finally {
         client.release();
@@ -174,5 +160,5 @@ app.post('/api/menu', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`✅ СЕРВЕР ОБНОВЛЕН ДО ВЕРСИИ SUPABASE на порту ${PORT}`);
+    console.log(`✅ СЕРВЕР ЗАПУЩЕН: ПОРТ ${PORT}`);
 });
